@@ -1,17 +1,18 @@
-﻿using UnityEngine;
+﻿using TMPro;
+using UnityEngine;
 using UnityEngine.UI;
 
 namespace YG.Example
 {
     public class LanguageExample : MonoBehaviour
     {
-        public string ru, en, tr;
+        public string ru, en;
 
-        private Text textComponent;
+        private TextMeshProUGUI textComponent;
 
         private void Awake()
         {
-            textComponent = GetComponent<Text>();
+            textComponent = GetComponent<TextMeshProUGUI>();
             SwitchLanguage(YG2.lang);
         }
 
@@ -30,9 +31,6 @@ namespace YG.Example
             {
                 case "ru":
                     textComponent.text = ru;
-                    break;
-                case "tr":
-                    textComponent.text = tr;
                     break;
                 default:
                     textComponent.text = en;

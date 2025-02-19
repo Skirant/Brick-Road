@@ -5,7 +5,7 @@ public class stickManManager : MonoBehaviour
 {
 	[Header("FX (Effects)")]
 	[SerializeField]
-	private ParticleSystem blood;
+	//private ParticleSystem blood;
 
 	private bool hasJumped;
 
@@ -20,7 +20,7 @@ public class stickManManager : MonoBehaviour
 		{
 			Object.Destroy(other.gameObject);
 			Object.Destroy(base.gameObject);
-			Object.Instantiate(blood, base.transform.position, Quaternion.identity);
+			//Object.Instantiate(blood, base.transform.position, Quaternion.identity);
 			PlayerManager.PlayerManagerInstance.UpdateStickManCount();
 			EnemyManager component = other.transform.parent.GetComponent<EnemyManager>();
 			if (component != null)
@@ -33,14 +33,14 @@ public class stickManManager : MonoBehaviour
 		{
 			base.transform.DOKill();
 			Object.Destroy(base.gameObject);
-			Object.Instantiate(blood, base.transform.position, Quaternion.identity);
+			//Object.Instantiate(blood, base.transform.position, Quaternion.identity);
 			PlayerManager.PlayerManagerInstance.UpdateStickManCount();
 			SoundManager.Instance.PlaySound("Kill");
 		}
 		if (other.CompareTag("Barricade"))
 		{
 			base.transform.DOKill();
-			Object.Instantiate(blood, base.transform.position, Quaternion.identity);
+			//Object.Instantiate(blood, base.transform.position, Quaternion.identity);
 		}
 		if (other.CompareTag("Jump") && !hasJumped)
 		{

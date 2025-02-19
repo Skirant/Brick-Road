@@ -1,467 +1,517 @@
-using System;
+using DG.Tweening;
 using System.Collections;
 using System.Collections.Generic;
-using DG.Tweening;
 using TMPro;
 using Unity.Mathematics;
 using UnityEngine;
+using Random = UnityEngine.Random;
 
 public class PlayerManager : MonoBehaviour
 {
-	[Header("Основные ссылки и переменные")]
-	public Transform player;
+    [Header("Основные ссылки и переменные")]
+    public Transform player;
+    [SerializeField] private TextMeshPro CounterText;
+    [SerializeField] private GameObject CounterLabel;
+    [SerializeField] private GameObject stickMan;
+    [Range(0f, 1f)][SerializeField] private float DistanceFactor = 0.2f;
+    [Range(0f, 1f)][SerializeField] private float Radius = 0.5f;
 
-	[SerializeField]
-	private TextMeshPro CounterText;
+    [Header("Скорости движения")]
+    public float playerSpeed = 5f;
+    public float idelSpeed = 2f;
+    public float fightSpeed = 1f;
+    [HideInInspector] public float roadSpeed;
 
-	[SerializeField]
-	private GameObject CounterLabel;
+    [Header("Ссылки на Road, Enemy и т.д.")]
+    [SerializeField] private Transform road;
+    [SerializeField] private Transform enemy;
 
-	[SerializeField]
-	private GameObject stickMan;
+    private int numberOfStickmans;
+    private int numberOfEnemyStickmans;
 
-	[Range(0f, 1f)]
-	[SerializeField]
-	private float DistanceFactor = 0.2f;
+    private Camera mainCamera;
+    private Vector3 mouseStartPos, playerStartPos;
+    private bool moveByTouch;
+    private bool attack;
+    public bool gameState;
 
-	[Range(0f, 1f)]
-	[SerializeField]
-	private float Radius = 0.5f;
+    [HideInInspector] public Vector3 cachedEndPosition;
+    public bool isEndPositionDirty = false;
 
-	[Header("Скорости движения")]
-	public float playerSpeed = 5f;
+    private bool isGameOver = false;
 
-	public float idelSpeed = 2f;
+    public static PlayerManager PlayerManagerInstance { get; private set; }
 
-	public float fightSpeed = 1f;
+    [Header("Скорость ускорения и проверка на одноразовость")]
+    [SerializeField] private float speedMultiplier = 2f;
+    private bool speedBust = true;
 
-	[HideInInspector]
-	public float roadSpeed;
+    private HashSet<stickManManager> jumpers = new HashSet<stickManManager>();
 
-	[Header("Ссылки на Road, Enemy и т.д.")]
-	[SerializeField]
-	private Transform road;
+    [Header("Границы от человечков")]
+    [SerializeField] private float distance50 = 0f;
+    [SerializeField] private float distance300 = 0f;
 
-	[SerializeField]
-	private Transform enemy;
+    [SerializeField] private float centerMoveDuration = 1f; // Время, за которое игрок сдвинется к X=0
+    [SerializeField] private float slowDownRate = 1f;       // Коэффициент экспоненциального замедления
 
-	private int numberOfStickmans;
+    // Для плавного смещения к X=0 после TriggerEndGame
+    private bool isMovingToCenterEndGame = false;
+    private float endGameCenterTimer = 0f;
 
-	private int numberOfEnemyStickmans;
+    private float centerMoveTimer = 0f;
+    private bool isMovingToCenter = false;
+    private bool trigerEndGame = false;
 
-	private Camera mainCamera;
+    [Header("Тест")]
+    public int testMankeStikmants = 0;
 
-	private Vector3 mouseStartPos;
+    private void Awake()
+    {
+        if (PlayerManagerInstance == null)
+            PlayerManagerInstance = this;
+        else
+            Destroy(gameObject);
+    }
 
-	private Vector3 playerStartPos;
+    private void Start()
+    {
+        player = transform;
+        numberOfStickmans = player.childCount - 1;
+        CounterText.text = numberOfStickmans.ToString();
+        mainCamera = Camera.main;
+        gameState = true;
 
-	private bool moveByTouch;
+        // Добавляем стартовых юнитов с учётом прокачки из Progress
+        MakeStickMan(testMankeStikmants + Progress.Instance.PlayerInfo.StartUnitsLevel);
+    }
 
-	private bool attack;
+    private void Update()
+    {
+        Attack();
 
-	public bool gameState;
+        if (gameState)
+        {
+            road.Translate(-road.forward * Time.deltaTime * roadSpeed);
+        }
 
-	[HideInInspector]
-	public Vector3 cachedEndPosition;
+        if (numberOfStickmans <= 5)
+        {
+            GameOver();
+        }
 
-	public bool isEndPositionDirty;
+        // Плавное смещение к центру в конце уровня
+        if (isMovingToCenterEndGame)
+        {
+            endGameCenterTimer += Time.deltaTime;
+            float t = Mathf.Clamp01(endGameCenterTimer / centerMoveDuration);
 
-	private bool isGameOver;
+            float newX = Mathf.Lerp(transform.position.x, 0f, t);
+            transform.position = new Vector3(newX, transform.position.y, transform.position.z);
 
-	[Header("Скорость ускорения и проверка на одноразовость")]
-	[SerializeField]
-	private float speedMultiplier = 2f;
+            // Останавливаем движение по дороге
+            playerSpeed = 0f;
+            // Если нужно, можно проверять, когда t >= 1f, чтобы остановить окончательно
+        }
+    }
 
-	private bool speedBust = true;
+    private void LateUpdate()
+    {
+        if (!gameState) return;
 
-	private HashSet<stickManManager> jumpers = new HashSet<stickManManager>();
+        // Определяем текущие границы по X в зависимости от количества stickman
+        float minX = numberOfStickmans < 250 ? -distance50 : -distance300;
+        float maxX = numberOfStickmans < 250 ? distance50 : distance300;
 
-	[Header("Границы от человечков")]
-	[SerializeField]
-	private float distance50;
+        Vector3 pos = transform.position;
+        pos.x = Mathf.Clamp(pos.x, minX, maxX);
+        transform.position = pos;
+    }
 
-	[SerializeField]
-	private float distance300;
+    private void Attack()
+    {
+        if (attack)
+        {
+            // Плавное замедление, пока идёт атака
+            roadSpeed = Mathf.Lerp(10, 1, Time.deltaTime * slowDownRate);
 
-	[SerializeField]
-	private float centerMoveDuration = 1f;
+            // Притягиваем игрока к центру (x=0) перед боем
+            if (isMovingToCenter)
+            {
+                centerMoveTimer += Time.deltaTime;
+                float t = Mathf.Clamp01(centerMoveTimer / centerMoveDuration);
+                float newX = Mathf.Lerp(transform.position.x, 0f, t);
+                transform.position = new Vector3(newX, transform.position.y, transform.position.z);
 
-	[SerializeField]
-	private float slowDownRate = 1f;
+                if (t >= 1f)
+                    isMovingToCenter = false;
+            }
 
-	private bool isMovingToCenterEndGame;
+            // Поворачиваем каждого stickman к врагу
+            Vector3 enemyDirection = new Vector3(enemy.position.x, transform.position.y, enemy.position.z) - transform.position;
+            for (int i = 1; i < transform.childCount; i++)
+            {
+                transform.GetChild(i).rotation = Quaternion.Slerp(
+                    transform.GetChild(i).rotation,
+                    Quaternion.LookRotation(enemyDirection, Vector3.up),
+                    Time.deltaTime * 3f
+                );
+            }
 
-	private float endGameCenterTimer;
+            // Если у врага ещё есть Stickman
+            if (enemy.GetChild(1).childCount > 1f)
+            {
+                // Сводим столкновение
+                for (int i = 0; i < transform.childCount; i++)
+                {
+                    if (i < enemy.GetChild(1).childCount)
+                    {
+                        Vector3 Distance = enemy.GetChild(1).GetChild(i).position - transform.GetChild(i).position;
+                        if (Distance.magnitude < 1f)
+                        {
+                            transform.GetChild(i).position = Vector3.Lerp(
+                                transform.GetChild(i).position,
+                                new Vector3(
+                                    enemy.GetChild(1).GetChild(i).position.x,
+                                    transform.GetChild(i).position.y,
+                                    enemy.GetChild(1).GetChild(i).position.z
+                                ),
+                                Time.deltaTime * 5f
+                            );
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Врагов больше нет
+                roadSpeed = idelSpeed;
+                attack = false;
+                FormatStickMan();
 
-	private float centerMoveTimer;
+                // Сбрасываем поворот человечков
+                for (int i = 1; i < transform.childCount; i++)
+                {
+                    transform.GetChild(i).rotation = Quaternion.identity;
+                }
 
-	private bool isMovingToCenter;
+                enemy.gameObject.SetActive(false);
+                isEndPositionDirty = true;
+            }
 
-	private bool trigerEndGame;
+            // Если у нас остался только "Player" (childCount == 1)
+            if (transform.childCount == 1)
+            {
+                enemy.transform.GetChild(1).GetComponent<EnemyManager>().StopAttacking();
+                gameObject.SetActive(false);
+            }
+        }
+        else
+        {
+            MoveThePlayer();
+        }
+    }
 
-	[Header("Тест")]
-	public int testMankeStikmants;
+    private void MoveThePlayer()
+    {
+        if (Input.GetMouseButtonDown(0) && gameState)
+        {
+            moveByTouch = true;
+            Plane plane = new Plane(Vector3.up, 0f);
+            Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
 
-	private float lastGateBonusTime = -1f;
+            if (plane.Raycast(ray, out float distance))
+            {
+                mouseStartPos = ray.GetPoint(distance + 1f);
+                playerStartPos = transform.position;
+            }
+        }
 
-	private float gateBonusCooldown = 1f;
+        if (Input.GetMouseButtonUp(0))
+        {
+            moveByTouch = false;
+        }
 
-	public static PlayerManager PlayerManagerInstance { get; private set; }
+        if (moveByTouch)
+        {
+            Plane plane = new Plane(Vector3.up, 0f);
+            Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
 
-	private void Awake()
-	{
-		if (PlayerManagerInstance == null)
-		{
-			PlayerManagerInstance = this;
-		}
-		else
-		{
-			UnityEngine.Object.Destroy(base.gameObject);
-		}
-	}
+            if (plane.Raycast(ray, out float distance))
+            {
+                Vector3 mousePos = ray.GetPoint(distance + 1f);
+                Vector3 move = mousePos - mouseStartPos;
+                Vector3 control = playerStartPos + move;
 
-	private void Start()
-	{
-		player = base.transform;
-		numberOfStickmans = player.childCount - 1;
-		CounterText.text = numberOfStickmans.ToString();
-		mainCamera = Camera.main;
-		gameState = true;
-		MakeStickMan(testMankeStikmants + Progress.Instance.PlayerInfo.StartUnitsLevel);
-	}
+                if (numberOfStickmans < 250)
+                    control.x = Mathf.Clamp(control.x, -distance50, distance50);
+                else if (numberOfStickmans > 250)
+                    control.x = Mathf.Clamp(control.x, -distance300, distance300);
 
-	private void Update()
-	{
-		Attack();
-		if (gameState)
-		{
-			road.Translate(-road.forward * Time.deltaTime * roadSpeed);
-		}
-		if (numberOfStickmans <= 5)
-		{
-			GameOver();
-		}
-		if (isMovingToCenterEndGame)
-		{
-			endGameCenterTimer += Time.deltaTime;
-			float t = Mathf.Clamp01(endGameCenterTimer / centerMoveDuration);
-			float x = Mathf.Lerp(base.transform.position.x, 0f, t);
-			base.transform.position = new Vector3(x, base.transform.position.y, base.transform.position.z);
-			playerSpeed = 0f;
-		}
-	}
+                transform.position = new Vector3(
+                    Mathf.Lerp(transform.position.x, control.x, Time.deltaTime * playerSpeed),
+                    transform.position.y,
+                    transform.position.z
+                );
+            }
+        }
+    }
 
-	private void LateUpdate()
-	{
-		if (gameState)
-		{
-			float min = ((numberOfStickmans < 250) ? (0f - distance50) : (0f - distance300));
-			float max = ((numberOfStickmans < 250) ? distance50 : distance300);
-			Vector3 position = base.transform.position;
-			position.x = Mathf.Clamp(position.x, min, max);
-			base.transform.position = position;
-		}
-	}
+    /// <summary>
+    /// Сформировать расположение stickman'ов вокруг Player.
+    /// </summary>
+    public void FormatStickMan()
+    {
+        int stickmanCount = player.childCount - 1;
+        if (stickmanCount <= 0) return;
 
-	private void Attack()
-	{
-		if (attack)
-		{
-			roadSpeed = Mathf.Lerp(10f, 1f, Time.deltaTime * slowDownRate);
-			if (isMovingToCenter)
-			{
-				centerMoveTimer += Time.deltaTime;
-				float num = Mathf.Clamp01(centerMoveTimer / centerMoveDuration);
-				float x = Mathf.Lerp(base.transform.position.x, 0f, num);
-				base.transform.position = new Vector3(x, base.transform.position.y, base.transform.position.z);
-				if (num >= 1f)
-				{
-					isMovingToCenter = false;
-				}
-			}
-			Vector3 forward = new Vector3(enemy.position.x, base.transform.position.y, enemy.position.z) - base.transform.position;
-			for (int i = 1; i < base.transform.childCount; i++)
-			{
-				base.transform.GetChild(i).rotation = Quaternion.Slerp(base.transform.GetChild(i).rotation, Quaternion.LookRotation(forward, Vector3.up), Time.deltaTime * 3f);
-			}
-			if ((float)enemy.GetChild(1).childCount > 1f)
-			{
-				for (int j = 0; j < base.transform.childCount; j++)
-				{
-					if (j < enemy.GetChild(1).childCount && (enemy.GetChild(1).GetChild(j).position - base.transform.GetChild(j).position).magnitude < 1f)
-					{
-						base.transform.GetChild(j).position = Vector3.Lerp(base.transform.GetChild(j).position, new Vector3(enemy.GetChild(1).GetChild(j).position.x, base.transform.GetChild(j).position.y, enemy.GetChild(1).GetChild(j).position.z), Time.deltaTime * 5f);
-					}
-				}
-			}
-			else
-			{
-				roadSpeed = idelSpeed;
-				attack = false;
-				FormatStickMan();
-				for (int k = 1; k < base.transform.childCount; k++)
-				{
-					base.transform.GetChild(k).rotation = Quaternion.identity;
-				}
-				enemy.gameObject.SetActive(value: false);
-				isEndPositionDirty = true;
-			}
-			if (base.transform.childCount == 1)
-			{
-				enemy.transform.GetChild(1).GetComponent<EnemyManager>().StopAttacking();
-				base.gameObject.SetActive(value: false);
-			}
-		}
-		else
-		{
-			MoveThePlayer();
-		}
-	}
+        float baseRadius = Radius;
+        float angleOffset = 10f;
+        int stickmansPerLayer = 8;
 
-	private void MoveThePlayer()
-	{
-		if (Input.GetMouseButtonDown(0) && gameState)
-		{
-			moveByTouch = true;
-			Plane plane = new Plane(Vector3.up, 0f);
-			Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
-			if (plane.Raycast(ray, out var enter))
-			{
-				mouseStartPos = ray.GetPoint(enter + 1f);
-				playerStartPos = base.transform.position;
-			}
-		}
-		if (Input.GetMouseButtonUp(0))
-		{
-			moveByTouch = false;
-		}
-		if (!moveByTouch)
-		{
-			return;
-		}
-		Plane plane2 = new Plane(Vector3.up, 0f);
-		Ray ray2 = mainCamera.ScreenPointToRay(Input.mousePosition);
-		if (plane2.Raycast(ray2, out var enter2))
-		{
-			Vector3 vector = ray2.GetPoint(enter2 + 1f) - mouseStartPos;
-			Vector3 vector2 = playerStartPos + vector;
-			if (numberOfStickmans < 250)
-			{
-				vector2.x = Mathf.Clamp(vector2.x, 0f - distance50, distance50);
-			}
-			else if (numberOfStickmans > 250)
-			{
-				vector2.x = Mathf.Clamp(vector2.x, 0f - distance300, distance300);
-			}
-			base.transform.position = new Vector3(Mathf.Lerp(base.transform.position.x, vector2.x, Time.deltaTime * playerSpeed), base.transform.position.y, base.transform.position.z);
-		}
-	}
+        int currentLayer = 0;
+        int stickmansInCurrentLayer = 0;
 
-	public void FormatStickMan()
-	{
-		if (player.childCount - 1 <= 0)
-		{
-			return;
-		}
-		float radius = Radius;
-		float num = 10f;
-		int num2 = 8;
-		int num3 = 0;
-		int num4 = 0;
-		for (int i = 1; i < player.childCount; i++)
-		{
-			if (num4 >= num2 * (num3 + 1))
-			{
-				num3++;
-				num2 += 4;
-			}
-			float num5 = radius + (float)num3 * DistanceFactor;
-			float f = (360f / (float)num2 * (float)num4 + UnityEngine.Random.Range(0f - num, num)) * ((float)Math.PI / 180f);
-			float x = Mathf.Cos(f) * num5;
-			float z = Mathf.Sin(f) * num5;
-			player.transform.GetChild(i).DOLocalMove(new Vector3(x, 0f, z), 0.5f).SetEase(Ease.OutBack);
-			num4++;
-		}
-	}
+        for (int i = 1; i < player.childCount; i++)
+        {
+            if (stickmansInCurrentLayer >= stickmansPerLayer * (currentLayer + 1))
+            {
+                currentLayer++;
+                stickmansPerLayer += 4; // Увеличиваем число stickman в каждом новом слое
+            }
 
-	public void MakeStickMan(int number)
-	{
-		for (int i = numberOfStickmans; i < number; i++)
-		{
-			UnityEngine.Object.Instantiate(stickMan, base.transform.position, quaternion.identity, base.transform);
-		}
-		numberOfStickmans = base.transform.childCount - 1;
-		CounterText.text = numberOfStickmans.ToString();
-		FormatStickMan();
-		isEndPositionDirty = true;
-	}
+            float layerRadius = baseRadius + currentLayer * DistanceFactor;
 
-	public Vector3 GetEndOfCrowdPosition()
-	{
-		if (isEndPositionDirty)
-		{
-			if (base.transform.childCount <= 1)
-			{
-				cachedEndPosition = base.transform.position;
-			}
-			else
-			{
-				cachedEndPosition = base.transform.GetChild(1).position;
-				for (int i = 1; i < base.transform.childCount; i++)
-				{
-					if (base.transform.GetChild(i).position.z < cachedEndPosition.z)
-					{
-						cachedEndPosition.z = base.transform.GetChild(i).position.z;
-					}
-				}
-			}
-			isEndPositionDirty = false;
-		}
-		return cachedEndPosition;
-	}
+            float angle = (360f / stickmansPerLayer) * stickmansInCurrentLayer;
+            angle += Random.Range(-angleOffset, angleOffset);
 
-	public void RemoveStickMen(int count)
-	{
-		int num = Mathf.Min(count, base.transform.childCount - 1);
-		List<Transform> list = new List<Transform>(num);
-		for (int i = 0; i < num; i++)
-		{
-			if (i + 1 < base.transform.childCount)
-			{
-				list.Add(base.transform.GetChild(i + 1));
-			}
-		}
-		foreach (Transform item in list)
-		{
-			if (item != null)
-			{
-				UnityEngine.Object.Destroy(item.gameObject);
-			}
-		}
-		StartCoroutine(UpdateStickManCountDelayed());
-	}
+            float rad = angle * Mathf.Deg2Rad;
+            float x = Mathf.Cos(rad) * layerRadius;
+            float z = Mathf.Sin(rad) * layerRadius;
 
-	private IEnumerator UpdateStickManCountDelayed()
-	{
-		yield return new WaitForSeconds(0.1f);
-		UpdateStickManCount();
-	}
+            player.transform.GetChild(i).DOLocalMove(new Vector3(x, 0, z), 0.5f)
+                .SetEase(Ease.OutBack);
 
-	public void UpdateStickManCount()
-	{
-		numberOfStickmans = base.transform.childCount - 1;
-		CounterText.text = numberOfStickmans.ToString();
-	}
+            stickmansInCurrentLayer++;
+        }
+    }
 
-	public void OnStickmanLanded(stickManManager stickman)
-	{
-		jumpers.Remove(stickman);
-		if (jumpers.Count == 0)
-		{
-			FormatStickMan();
-		}
-	}
+    /// <summary>
+    /// Создаёт нужное количество Stickman в группе.
+    /// </summary>
+    public void MakeStickMan(int number)
+    {
+        for (int i = numberOfStickmans; i < number; i++)
+        {
+            Instantiate(stickMan, transform.position, quaternion.identity, transform);
+        }
 
-	public void OnStickmanHitJump(stickManManager stickman)
-	{
-		jumpers.Add(stickman);
-		stickman.DoJump();
-	}
+        numberOfStickmans = transform.childCount - 1;
+        CounterText.text = numberOfStickmans.ToString();
+        FormatStickMan();
+        isEndPositionDirty = true;
+    }
 
-	private void GameOver()
-	{
-		if (isGameOver)
-		{
-			return;
-		}
-		UpdateStickManCount();
-		if (numberOfStickmans <= 0)
-		{
-			isGameOver = true;
-			roadSpeed = 0f;
-			CounterLabel.SetActive(value: false);
-			if (trigerEndGame)
-			{
-				WinGame();
-			}
-			else
-			{
-				GameManager.Instance.GameOver();
-			}
-		}
-	}
+    /// <summary>
+    /// Возвращает самую «заднюю» (по Z) позицию в группе.
+    /// </summary>
+    /// <returns>Vector3, где z — минимален у всей группы.</returns>
+    public Vector3 GetEndOfCrowdPosition()
+    {
+        if (isEndPositionDirty)
+        {
+            if (transform.childCount <= 1)
+            {
+                cachedEndPosition = transform.position;
+            }
+            else
+            {
+                cachedEndPosition = transform.GetChild(1).position;
 
-	public int GetStickmanCount()
-	{
-		return base.transform.childCount - 1;
-	}
+                for (int i = 1; i < transform.childCount; i++)
+                {
+                    if (transform.GetChild(i).position.z < cachedEndPosition.z)
+                    {
+                        cachedEndPosition.z = transform.GetChild(i).position.z;
+                    }
+                }
+            }
+            isEndPositionDirty = false;
+        }
+        return cachedEndPosition;
+    }
 
-	private void OnTriggerEnter(Collider other)
-	{
-		if (other.CompareTag("Gate"))
-		{
-			if (Time.time - lastGateBonusTime < gateBonusCooldown)
-			{
-				return;
-			}
-			lastGateBonusTime = Time.time;
-			GateManager component = other.GetComponent<GateManager>();
-			int stickmanCount = GetStickmanCount();
-			int num = (component.multiply ? (stickmanCount * component.randomNumber) : (stickmanCount + component.randomNumber)) - stickmanCount;
-			if (num > 0)
-			{
-				MakeStickMan(GetStickmanCount() + num);
-			}
-			SoundManager.Instance.PlaySound("passageGate");
-		}
-		if (other.CompareTag("Enemy"))
-		{
-			enemy = other.transform;
-			attack = true;
-			isMovingToCenter = true;
-			centerMoveTimer = 0f;
-			GetStickmanCount();
-			other.transform.GetChild(1).GetComponent<EnemyManager>().AttackThem(base.transform);
-		}
-		if (other.CompareTag("TrigerEndGame") && speedBust)
-		{
-			if (speedBust)
-			{
-				roadSpeed *= speedMultiplier;
-				speedBust = false;
-			}
-			isMovingToCenterEndGame = true;
-			endGameCenterTimer = 0f;
-			trigerEndGame = true;
-		}
-		if (other.CompareTag("TrigerOpenChest"))
-		{
-			roadSpeed = 0f;
-			CounterLabel.SetActive(value: false);
-			WinGame();
-		}
-		if (other.CompareTag("Jump"))
-		{
-			SoundManager.Instance.PlaySound("Jump");
-		}
-	}
+    /// <summary>
+    /// Удалить указанное количество Stickman из группы.
+    /// </summary>
+    public void RemoveStickMen(int count)
+    {
+        int actualCount = Mathf.Min(count, transform.childCount - 1);
 
-	public void BuyStickMan(int number)
-	{
-		MakeStickMan(GetStickmanCount() + number);
-	}
+        List<Transform> childrenToRemove = new List<Transform>(actualCount);
+        for (int i = 0; i < actualCount; i++)
+        {
+            if (i + 1 < transform.childCount)
+            {
+                childrenToRemove.Add(transform.GetChild(i + 1));
+            }
+        }
 
-	public void StartGame()
-	{
-		roadSpeed = idelSpeed;
-		playerSpeed = idelSpeed;
-	}
+        foreach (Transform child in childrenToRemove)
+        {
+            if (child != null)
+            {
+                Destroy(child.gameObject);
+            }
+        }
 
-	public void WinGame()
-	{
-		GameManager.Instance.WinGame();
-		int coinsBad = 100 + (int)(100f * ((float)numberOfStickmans / 100f));
-		GameManager.Instance.CoinManager(coinsBad);
-		SoundManager.Instance.PlaySound("Win");
-	}
+        // С небольшой задержкой обновим счётчик, когда объекты действительно будут удалены
+        StartCoroutine(UpdateStickManCountDelayed());
+    }
+
+    private IEnumerator UpdateStickManCountDelayed()
+    {
+        yield return new WaitForSeconds(0.1f);
+        UpdateStickManCount();
+    }
+
+    /// <summary>
+    /// Пересчитать кол-во Stickman и обновить текстовый счётчик.
+    /// </summary>
+    public void UpdateStickManCount()
+    {
+        numberOfStickmans = transform.childCount - 1;
+        CounterText.text = numberOfStickmans.ToString();
+    }
+
+    public void OnStickmanLanded(stickManManager stickman)
+    {
+        jumpers.Remove(stickman);
+
+        if (jumpers.Count == 0)
+        {
+            FormatStickMan();
+        }
+    }
+
+    public void OnStickmanHitJump(stickManManager stickman)
+    {
+        jumpers.Add(stickman);
+        stickman.DoJump();
+    }
+
+    private void GameOver()
+    {
+        if (isGameOver) return;
+
+        UpdateStickManCount();
+
+        if (numberOfStickmans <= 0)
+        {
+            isGameOver = true;
+            roadSpeed = 0;
+            CounterLabel.SetActive(false);
+
+            if (trigerEndGame)
+            {
+                WinGame();
+            }
+            else
+            {
+                GameManager.Instance.GameOver();
+            }
+        }
+    }
+
+    public int GetStickmanCount()
+    {
+        return transform.childCount - 1;
+    }
+
+    private float lastGateBonusTime = -1f;
+    private float gateBonusCooldown = 1f;
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.CompareTag("Gate"))
+        {
+            // Проверяем задержку между бонусами ворот
+            if (Time.time - lastGateBonusTime < gateBonusCooldown) return;
+            lastGateBonusTime = Time.time;
+
+            GateManager gateManager = other.GetComponent<GateManager>();
+            int currentStickmanCount = numberOfStickmans;
+
+            // Логика расчёта
+            int newCount = gateManager.multiply
+                ? currentStickmanCount * gateManager.randomNumber
+                : currentStickmanCount + gateManager.randomNumber;
+
+            int toAdd = newCount;
+            if (gateManager.isFirstGate)
+            {
+                MakeStickMan(toAdd);
+            }
+            else
+            {
+                MakeStickMan(toAdd + 1);
+            }
+
+            SoundManager.Instance.PlaySound("passageGate");
+        }
+
+        if (other.CompareTag("Enemy"))
+        {
+            enemy = other.transform;
+            attack = true;
+            isMovingToCenter = true;
+            centerMoveTimer = 0f;
+            other.transform.GetChild(1).GetComponent<EnemyManager>().AttackThem(transform);
+        }
+
+        if (other.CompareTag("TrigerEndGame"))
+        {
+            if (speedBust)
+            {
+                roadSpeed *= speedMultiplier;
+                speedBust = false;
+                isMovingToCenterEndGame = true;
+                endGameCenterTimer = 0f;
+                trigerEndGame = true;
+            }
+        }
+
+        if (other.CompareTag("TrigerOpenChest"))
+        {
+            roadSpeed = 0;
+            CounterLabel.SetActive(false);
+            WinGame();
+        }
+
+        if (other.CompareTag("Jump"))
+        {
+            SoundManager.Instance.PlaySound("Jump");
+        }
+    }
+
+    public void BuyStickMan(int number)
+    {
+        MakeStickMan(GetStickmanCount() + number);
+    }
+
+    public void StartGame()
+    {
+        roadSpeed = idelSpeed;
+        playerSpeed = idelSpeed;
+    }
+
+    public void WinGame()
+    {
+        GameManager.Instance.WinGame();
+
+        int winCoin = 100 + (int)(100 * ((float)numberOfStickmans / 100));
+        GameManager.Instance.CoinManager(winCoin);
+
+        SoundManager.Instance.PlaySound("Win");
+    }
 }

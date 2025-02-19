@@ -259,4 +259,4 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6ecb9ad666c18fdfa6a72aa65fddb702, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  blood: {fileID: 0}
+  blood: {fileID: 1703363803249520232, guid: 3f114408646b8834d9217e4bbc3a9bb4, type: 3}

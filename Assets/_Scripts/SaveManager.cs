@@ -38,7 +38,7 @@ public class SaveManager : MonoBehaviour
 	private void ResetSaves()
 	{
 		Debug.Log("Сохранения удалены и перезаписаны.");
-		//YG2.SetDefaultSaves();
-		//YG2.SaveProgress();
+		YG2.SetDefaultSaves();
+		YG2.SaveProgress();
 	}
 }

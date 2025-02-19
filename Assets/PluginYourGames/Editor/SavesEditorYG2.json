@@ -1,0 +1,19 @@
+{
+    "intExample": 5,
+    "strExample": "Hello!",
+    "boolExample": [
+        false,
+        false,
+        false,
+        false
+    ],
+    "playerInfo": {
+        "Money": 1277,
+        "LevelNumber": 10,
+        "StartUnits": 600,
+        "Income": 500,
+        "StartUnitsLevel": 6,
+        "IncomeLevel": 5
+    },
+    "idSave": 24
+}
