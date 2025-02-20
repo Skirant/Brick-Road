@@ -1,0 +1,3 @@
+Build path: Z:/Unity для видео/Brick Road2.exe
+Build number: 15
+PluginYG version: 2.0031
